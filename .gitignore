@@ -1,1 +1,3 @@
 models/*.pt
+models/sam2_checkpoints/*.pt
+sam2_hiera_large.pt
