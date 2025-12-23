@@ -1,163 +1,224 @@
 # 5-ALA Fluorescence Video Annotation Pipeline
 
-A complete pipeline for annotating 5-ALA fluorescence surgical videos, including cavity segmentation, artifact detection, and fluorescence analysis.
+A streamlined pipeline for annotating 5-ALA fluorescence surgical videos with AI-assisted cavity segmentation, automatic mask propagation, and intelligent workflow management.
 
 ---
 
-## Setup (Do This First!)
+## Quick Start
 
-### Step 1: Install Python Dependencies
+### 1. Install Dependencies
 ```bash
+# Install Python packages
 pip install -r requirements.txt
-```
 
-### Step 2: Install SAM2 (Segment Anything Model 2)
-**This is a separate step - SAM2 is not on PyPI!**
-```bash
+# Install SAM2 (Segment Anything Model 2)
 pip install git+https://github.com/facebookresearch/segment-anything-2.git
 ```
 
-### Step 3: SAM2 Model (Already Included!)
-The model checkpoint (`sam2_hiera_large.pt`) and config (`sam2_hiera_l.yaml`) are **already included** in the `models/sam2_checkpoints/` folder. No download needed!
+### 2. Download SAM2 Model
+The SAM2 checkpoint (~900MB) is required but not included in the repository:
 
-### Step 4: Set Up Your Video Data
-
-**CRITICAL**: The folder structure must be like this:
-
-```
-5-ALA-Video-Annotation/          <-- Project folder (run scripts from HERE)
-├── scripts/                     <-- Scripts folder
-├── data/                        <-- MUST be named "data" exactly
-│   └── my-surgery-video/        <-- Can be any name you want
-│       └── recording.mp4        <-- Any video name works! (.mp4, .avi, .mov)
-└── models/
-```
-
-**Common Mistakes:**
-- Video directly in `data/video.mp4` - WON'T WORK (needs subfolder)
-- Running scripts from inside `scripts/` folder - WON'T WORK
-
-**Step-by-step setup:**
 ```bash
-# 1. Navigate to the project folder
-cd 5-ALA-Video-Annotation
-
-# 2. Create the data folder structure
-mkdir -p data/my-surgery-video
-
-# 3. Copy your video (any name works!)
-cp /path/to/your/surgery_recording.mp4 data/my-surgery-video/
-
-# 4. Verify structure is correct
-ls data/my-surgery-video/
-# Should show your video file
+# Download to models/sam2_checkpoints/
+cd models/sam2_checkpoints
+wget https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt
+cd ../..
 ```
 
-**Now you're ready to use the tools!** The cavity definition tool will process frames on-the-fly as you work.
+The config file (`sam2_hiera_l.yaml`) is already included.
 
----
-
-## Pipeline Overview
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  1. CAVITY DEFINITION                                           │
-│     define_cavity_polished.py                                   │
-│     Interactive tool with SAM2 + propagation                    │
-│     Processes frames on-the-fly (original/gamma/HSV-V modes)    │
-│     Output: cavity_mask.png per frame                           │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  2. ARTIFACT DETECTION                                          │
-│     detect_reflections_two_stage.py → reflection masks          │
-│     detect_blood_simple.py → blood masks                        │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  3. ANALYSIS                                                    │
-│     trajectory_radial_analysis_v2.py                            │
-│     Fluorescence decay analysis (R, R/G ratio)                  │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  5. VISUALIZATION                                               │
-│     create_comparison_video.py                                  │
-│     Side-by-side video: Original | R heatmap | R/G heatmap      │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Using the Tools
-
-### 1. Define Cavities (Interactive GUI)
+### 3. Run the Cavity Tool
 ```bash
 python scripts/02_cavity_definition/define_cavity_polished.py
 ```
 
-This opens a GUI where you:
-1. Select your video from the dropdown
-2. Select a frame range (must be pre-rendered first!)
-3. Click "Open Tool"
-4. Use SAM2 click or brush to define the cavity boundary
-5. Press `]` to move to next frame - **SAM2 automatically propagates your mask to the next frame!**
-6. Refine the propagated mask if needed, then continue
-7. Close the tool - **session summary with all annotations is created automatically!**
+That's it! The tool will:
+- Let you browse for any folder containing MP4 videos
+- Automatically scan and list all videos found
+- Process video frames on-the-fly (no pre-rendering needed)
+- Auto-save all your work as you annotate
 
-**Note:** The tool automatically handles masks:
-- **Moving forward** (`]`) to an unannotated frame: SAM2 auto-propagates the current mask
-- **Moving to any frame**: Auto-saves current frame's mask
-- **Going back**: Loads previously annotated masks for editing
-- **SAM2 propagation**: Works on-the-fly using current video frames
+---
 
-### 2. Detect Artifacts (After Cavity Masks Exist)
+## Cavity Definition Tool
 
-Replace `my-surgery-video` with your actual folder name:
+### Features
 
-```bash
-# Reflections (bright non-fluorescing spots)
-python scripts/03_analysis/detect_reflections_two_stage.py \
-  --video-folder data/my-surgery-video
+**🎯 Flexible Video Selection**
+- Browse to any directory containing MP4 videos
+- Recursive search finds all videos in subdirectories
+- Select any frame range (500-frame batches)
+- Works with any folder structure
 
-# Blood (dark regions)
-python scripts/03_analysis/detect_blood_simple.py \
-  --video-folder data/my-surgery-video
+**🤖 AI-Assisted Segmentation**
+- SAM2 (Segment Anything Model 2) integration
+- Click or brush to define cavity boundaries
+- Automatic mask propagation to next frame
+- Real-time preview and refinement
+
+**💾 Intelligent Auto-Save**
+- Auto-saves when moving between frames
+- Auto-saves when closing the tool
+- Creates session summary with complete metadata
+- Never lose your work
+
+**🔄 Cascading Updates**
+- Modify any frame, changes propagate forward automatically
+- Edit frame 100 → frames 101, 102, 103... update as you navigate
+- Existing masks are intelligently replaced with updated versions
+- Consistent annotations throughout the sequence
+
+**📊 Frame Display**
+- Shows actual frame numbers (e.g., 500-999, not 0-499)
+- Slider operates on real frame indices
+- Progress tracking shows completed masks per range
+
+### Workflow
+
+1. **Launch Tool**
+   ```bash
+   python scripts/02_cavity_definition/define_cavity_polished.py
+   ```
+
+2. **Select Video**
+   - Click "Browse..." to select a folder
+   - Choose video from dropdown (shows all MP4s found)
+   - View video info: total frames, FPS, existing masks
+
+3. **Select Frame Range**
+   - Choose 500-frame batch to work on
+   - See mask completion status (e.g., "500-999 (123 masks)")
+   - Click "Open Tool" to start
+
+4. **Annotate Cavities**
+   - **First frame**: Click/brush to define cavity boundary with SAM2
+   - **Next frame** (`]` key): Mask automatically propagates from previous frame
+   - **Refine**: Add/remove points to adjust the propagated mask
+   - **Continue**: Keep moving forward, masks auto-save and auto-propagate
+   - **Edit existing**: Go back to any frame, modify it, then move forward to update subsequent frames
+
+5. **Close & Review**
+   - Close tool (Q/Escape/X) - everything saves automatically
+   - Session summary created in `masks/cavity/session_summary.json`
+   - All modified frames and metadata saved
+
+### Controls
+
+| Key/Action | Function |
+|------------|----------|
+| **Left Click** | Add point to include region (Add mode) |
+| **Left Click** | Add point to exclude region (Exclude mode) |
+| **Brush Drag** | Paint to include/exclude areas (Brush mode) |
+| `,` (comma) | Wobble left - peek at previous frame (raw, no mask) |
+| `.` (period) | Wobble right - peek at next frame (raw, no mask) |
+| `[` | Navigate to previous frame (auto-saves current) |
+| `]` | Navigate to next frame (auto-saves current, auto-propagates) |
+| **Slider** | Jump to any frame by actual frame number |
+| `D` | Cycle display mode: Original → Gamma → HSV-V |
+| `A` | Add mode (include regions in mask) |
+| `X` | Exclude mode (remove regions from mask) |
+| `B` | Toggle Click/Brush tool |
+| `+` / `=` | Increase brush size |
+| `-` | Decrease brush size |
+| `Z` | Undo last edit (enabled only after modifications) |
+| `R` | Reset - clear all mask and points for current frame |
+| `Q` / Escape | Quit tool (auto-saves everything) |
+
+### Display Modes
+
+- **Original**: Raw video frame
+- **Gamma**: Gamma correction + CLAHE + bilateral filter (enhances fluorescence)
+- **HSV-V**: HSV Value channel (brightness only, useful for detecting artifacts)
+
+All processing happens on-the-fly from the video file - no pre-rendering needed.
+
+### Auto-Save System
+
+**Frame Navigation Auto-Save**
+- Moving to a different frame automatically saves the current frame
+- Applies when using `[`, `]`, slider, or any navigation method
+- Silent operation - no interruption to workflow
+
+**Forward Propagation**
+- Moving forward (`]`) to next frame triggers SAM2 propagation
+- Existing masks are **always updated** based on previous frame
+- Creates consistent, cascading annotations
+- No manual propagation button needed
+
+**Close-on-Exit Auto-Save**
+- Closing tool saves all modified frames
+- Creates `session_summary.json` with complete metadata
+- Shows single summary: "✓ Saved 25 frames to session_summary.json"
+
+**Session Summary Contents**
+```json
+{
+  "video_name": "recording.mp4",
+  "video_path": "/path/to/data/my-video/recording.mp4",
+  "timestamp": "2025-12-22T15:30:45",
+  "frame_range": {
+    "start": 500,
+    "end": 999
+  },
+  "total_frames_in_range": 500,
+  "modified_frames_count": 123,
+  "modified_frames": [500, 501, 502, ...],
+  "frames": [
+    {
+      "frame_number": 500,
+      "has_mask": true,
+      "cavity_points_pos": [[234, 567], [345, 678]],
+      "cavity_points_neg": [[120, 300]]
+    }
+  ]
+}
 ```
 
-### 3. Run Analysis
-```bash
-python scripts/03_analysis/trajectory_radial_analysis_v2.py \
-  --video-folder data/my-surgery-video \
-  --frames "50,100,150,200"
+### Cascading Updates
+
+**How It Works:**
+1. Annotate frame 100 normally
+2. Press `]` to move to frame 101 → SAM2 propagates mask from frame 100
+3. **If frame 101 already had a mask**, it's **replaced** with the new propagation
+4. Modify frame 101 (add/remove points to refine)
+5. Press `]` to move to frame 102 → SAM2 propagates updated mask
+6. Continue forward → all subsequent frames update based on your changes
+
+**Benefits:**
+- ✓ Make corrections anywhere in the sequence
+- ✓ Changes automatically flow forward
+- ✓ No need to re-annotate subsequent frames manually
+- ✓ Maintains consistency across the entire video
+
+**Example Workflow:**
+```
+Frame 100: Define initial cavity
+Frame 101-150: Auto-propagated from frame 100
+[Notice issue at frame 125 - tool boundary changed]
+Frame 125: Fix boundary by adding points
+Frame 126-150: Auto-update with corrected boundary as you navigate forward
 ```
 
-### 4. Create Comparison Video
-```bash
-python scripts/04_visualization/create_comparison_video.py \
-  --video data/my-surgery-video/video.mp4 \
-  --cavity-dir data/my-surgery-video/masks/cavity \
-  --output data/my-surgery-video/comparison_video.mp4
-```
+---
 
 ## Directory Structure
 
 ```
-5-ALA Video Annotation/
+Project Root/
 ├── data/
-│   └── {video-name}/              # One folder per video
-│       ├── video.mp4              # Source video
-│       ├── masks/                 # All annotation masks
-│       │   ├── cavity/            # Cavity annotation output
-│       │   │   ├── session_summary.json  # Auto-saved session metadata
-│       │   │   └── frame_NNNNNN/
-│       │   │       ├── cavity_mask.png
-│       │   │       └── instance_data.json
-│       │   └── blood/             # (Future) Blood masks
-│       │       └── reflection/    # (Future) Reflection masks
-│       └── pipeline/              # Analysis outputs (legacy)
-│           ├── 02_cavity/         # Legacy cavity location
-│           └── 03_analysis/       # Analysis results
+│   └── {video-folder}/            # Video folder (any name)
+│       ├── video.mp4              # Source video (any name)
+│       └── masks/                 # Auto-created by tools
+│           └── cavity/            # Cavity annotations
+│               ├── session_summary.json
+│               └── frame_NNNNNN/  # Per-frame folders
+│                   ├── cavity_mask.png
+│                   ├── instance_data.json
+│                   └── visualization.png
 ├── models/
-│   └── sam2_checkpoints/          # SAM2 model weights
+│   └── sam2_checkpoints/
+│       ├── sam2_hiera_large.pt    # ~900MB (download separately)
+│       └── sam2_hiera_l.yaml      # Config (included)
 ├── scripts/
 │   ├── 02_cavity_definition/
 │   │   └── define_cavity_polished.py
@@ -168,127 +229,162 @@ python scripts/04_visualization/create_comparison_video.py \
 │   ├── 04_visualization/
 │   │   └── create_comparison_video.py
 │   └── utilities/
-│       └── common.py              # Shared utilities
-└── old/                           # Legacy/archived files
+│       ├── common.py
+│       └── read_session_summary.py
+└── README.md
 ```
 
-## Cavity Tool Controls
+**Mask Output Location:**
+- **New (current)**: `{video-folder}/masks/cavity/`
+- **Legacy (backwards compatible)**: `{video-folder}/pipeline/02_cavity/cavity_only/frames/`
 
-| Key | Action |
-|-----|--------|
-| `,` / `.` | **Wobble preview** - peek at adjacent frame (raw, no mask) to see tool/tissue |
-| `[` / `]` | Navigate to different frame - auto-saves current, auto-propagates forward |
-| `D` | Cycle display mode (Original → Gamma → HSV-V) |
-| `A` / `X` | Add / Exclude mode |
-| `B` | Toggle brush mode |
-| `+` / `-` | Adjust brush size |
-| `Z` | Undo (enabled only after modifications) |
-| `R` | Reset - erase mask for current frame |
-| `Q` | Quit |
+The tool automatically searches both locations and saves to the new structure.
 
-**Workflow tips:**
-- **Auto-propagation** - press `]` to move forward, SAM2 automatically generates mask for next frame
-- **Auto-save on navigation** - masks are saved automatically when you move between frames
-- **Undo intelligently** - undo button is only enabled after you make modifications
-- **Reset to clear** - use `R` to completely erase the mask and start over on current frame
-- **No manual save needed** - everything saves automatically as you work
-- **Frames are processed on-the-fly** - no pre-rendering needed
+---
 
-## Auto-Save on Close 🆕
+## Utilities
 
-**The tool now automatically saves all your work when you close it!**
-
-### What Gets Saved
-Masks are automatically saved in two ways:
-1. **On frame navigation** - when you move to a different frame (using `[`, `]`, slider, or frame navigation)
-2. **On tool close** - when you quit (Q, Escape, or X button)
-
-A **session summary** (`session_summary.json`) is created on close with complete metadata about all annotated frames.
-
-### Session Summary Contents
-```json
-{
-  "video_name": "2025-03-25-Blue-frames",
-  "video_path": "/path/to/video.mp4",
-  "frame_range": {"start": 0, "end": 499},
-  "total_frames_in_range": 500,
-  "modified_frames_count": 25,
-  "modified_frames": [10, 15, 20, 25, ...],
-  "frames": [
-    {
-      "frame_number": 10,
-      "has_mask": true,
-      "cavity_points_pos": [[234, 567], [345, 678]],
-      "cavity_points_neg": []
-    },
-    ...
-  ]
-}
-```
-
-### Reading Session Data
+### Read Session Summary
 ```bash
-# View session summary
+# View human-readable session data
 python scripts/utilities/read_session_summary.py \
   data/my-video/masks/cavity/session_summary.json
 
-# Export frame list
+# Export list of frames with masks
 python scripts/utilities/read_session_summary.py \
   data/my-video/masks/cavity/session_summary.json \
-  --export-frames modified_frames.txt
+  --export-frames annotated_frames.txt
 ```
 
-### Benefits
-- ✓ **Never lose work** - no need to remember to save every frame
-- ✓ **Complete tracking** - know exactly which frames you annotated
-- ✓ **Batch processing** - use session data for automated analysis
-- ✓ **Resume work** - see what's done, what needs attention
+Output example:
+```
+Session Summary
+==================================================
+Video: recording.mp4
+Frame Range: 500-999 (500 frames)
+Modified Frames: 123 (24.6%)
 
-## Detection Parameters
+Frames with Masks: 123
+Frames with Points: 45
 
-### Reflections (Two-Stage)
-- **Stage 1 (Seeds)**: V ≥ 0.65 AND R < 0.40
-- **Stage 2 (Expand)**: V ≥ 0.60 within 15px of seeds
+Frame Details:
+- Frame 500: Mask ✓, Points: 12 add, 3 exclude
+- Frame 501: Mask ✓, Points: 0 add, 0 exclude (propagated)
+...
+```
 
-### Blood
-- V < 0.20 AND B < 0.20
+---
+
+## Analysis Pipeline (Coming Soon)
+
+### 2. Detect Artifacts
+```bash
+# Reflections
+python scripts/03_analysis/detect_reflections_two_stage.py \
+  --video-folder data/my-video
+
+# Blood
+python scripts/03_analysis/detect_blood_simple.py \
+  --video-folder data/my-video
+```
+
+### 3. Fluorescence Analysis
+```bash
+python scripts/03_analysis/trajectory_radial_analysis_v2.py \
+  --video-folder data/my-video \
+  --frames "50,100,150,200"
+```
+
+### 4. Create Comparison Video
+```bash
+python scripts/04_visualization/create_comparison_video.py \
+  --video data/my-video/video.mp4 \
+  --cavity-dir data/my-video/masks/cavity \
+  --output data/my-video/comparison_video.mp4
+```
+
+---
 
 ## Troubleshooting
 
-### "No videos found" or "No data directory found"
-```bash
-# Check you're in the right directory
-pwd
-# Should end with: 5-ALA-Video-Annotation (or your project folder name)
-
-# Check data folder exists
-ls data/
-# Should show your video folder(s)
-
-# Check video exists
-ls data/YOUR_FOLDER_NAME/
-# Should show your video file (.mp4, .avi, or .mov)
-```
-
-### Video not showing in dropdown
-- Video must be inside a subfolder of `data/`, not directly in `data/`
-- Supported formats: .mp4, .avi, .mov
+### No videos found in directory
+- Make sure you're selecting a folder that contains `.mp4` files
+- Tool searches recursively, so videos can be in subfolders
+- Check file extension is `.mp4` or `.MP4` (case-sensitive on Linux)
 
 ### SAM2 not loading
 ```bash
-# Check model file exists
-ls -la models/sam2_checkpoints/
-# Should show: sam2_hiera_large.pt (~900MB)
+# Verify model file exists and is ~900MB
+ls -lh models/sam2_checkpoints/sam2_hiera_large.pt
+
+# Re-download if missing or corrupted
+cd models/sam2_checkpoints
+wget https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt
 ```
 
-### "No module named X" errors
+### Module not found errors
 ```bash
+# Reinstall all dependencies
 pip install -r requirements.txt
+
+# Reinstall SAM2
+pip install git+https://github.com/facebookresearch/segment-anything-2.git
 ```
 
-### Scripts can't find paths
-- **Always run scripts from the project root directory**
-- `cd` to the folder containing `scripts/`, `data/`, `README.md`
-- Use relative paths: `data/my-video` not `/Users/name/...`
+### Frame numbers seem wrong
+- The tool now displays **actual frame numbers** from the video
+- If you select range 500-999, the slider shows 500, 501, 502... (not 0, 1, 2...)
+- Saved files use actual frame numbers: `frame_000500`, `frame_000501`, etc.
+
+### Existing masks not loading
+- Tool checks new location first: `{video-folder}/masks/cavity/`
+- Then checks legacy locations for backwards compatibility
+- If masks are elsewhere, copy them to `{video-folder}/masks/cavity/frame_NNNNNN/`
+
+### Auto-propagation not working
+- Requires SAM2 to be installed: `pip install git+https://github.com/facebookresearch/segment-anything-2.git`
+- Model checkpoint must exist: `models/sam2_checkpoints/sam2_hiera_large.pt`
+- Only propagates when moving forward by one frame (pressing `]`)
+- Requires an existing mask to propagate from
+
+---
+
+## System Requirements
+
+- **Python**: 3.10+
+- **GPU**: Recommended for SAM2 (CUDA or MPS)
+  - CPU mode available but significantly slower
+- **RAM**: 8GB minimum, 16GB recommended
+- **Disk**: 1GB for SAM2 model + space for video and masks
+
+## Dependencies
+
+- PyQt5 - GUI framework
+- OpenCV - Video and image processing
+- NumPy - Numerical operations
+- Matplotlib - Visualization
+- PyTorch - SAM2 backend
+- SAM2 - Segmentation model
+
+---
+
+## Citation
+
+If you use this tool in your research, please cite:
+
+```bibtex
+@software{5ala_annotation_2025,
+  title={5-ALA Fluorescence Video Annotation Pipeline},
+  author={Surreality Lab},
+  year={2025},
+  url={https://github.com/surreality-lab/5-ala-cavity}
+}
+```
+
+---
+
+## License
+
+MIT License - see LICENSE file for details.
 
 
