@@ -2061,7 +2061,7 @@ def main():
     parser.add_argument("--end", type=int, default=None,
                        help="End frame index")
     parser.add_argument("--checkpoint", type=str, 
-                       default=str(Path(__file__).parent.parent.parent / "models" / "sam2_checkpoints" / "sam2_cavity_finetuned.pt"),
+                       default='/opt/5-ALA-Videos/weights/sam2_cavity_finetuned.pt',
                        help="Path to SAM2 checkpoint")
     
     args = parser.parse_args()
