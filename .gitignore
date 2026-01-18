@@ -1,3 +1,11 @@
 models/*.pt
 models/sam2_checkpoints/*.pt
 sam2_hiera_large.pt
+
+# Python bytecode
+__pycache__/
+**/__pycache__/
+*.py[cod]
+
+# Training artifacts
+scripts/retraining/

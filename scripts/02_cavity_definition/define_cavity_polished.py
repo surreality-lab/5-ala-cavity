@@ -19,6 +19,88 @@ import json
 import tempfile
 import shutil
 import sys
+import os
+
+
+def _opencv_videoio_build_summary():
+    """Return a small, relevant subset of cv2.getBuildInformation()."""
+    try:
+        info = cv2.getBuildInformation()
+    except Exception:
+        return "(cv2.getBuildInformation() unavailable)"
+
+    keywords = (
+        "Video I/O",
+        "FFMPEG",
+        "GStreamer",
+        "v4l",
+        "V4L",
+        "avcodec",
+        "avformat",
+        "avutil",
+        "swscale",
+        "Media I/O",
+        "CUDA",
+    )
+    lines = []
+    for line in info.splitlines():
+        if any(k.lower() in line.lower() for k in keywords):
+            lines.append(line.rstrip())
+
+    if not lines:
+        return "(no Video I/O lines found in build info)"
+    return "\n".join(lines[:80])
+
+
+def _opencv_runtime_diagnostics(video_path: Path | None = None):
+    parts = [
+        f"cv2 version: {getattr(cv2, '__version__', 'unknown')}",
+        f"cv2 file: {getattr(cv2, '__file__', 'unknown')}",
+    ]
+    if video_path is not None:
+        try:
+            resolved = video_path.resolve()
+        except Exception:
+            resolved = video_path
+        parts.append(f"video path: {video_path}")
+        parts.append(f"video exists: {video_path.exists()}")
+        parts.append(f"video resolved: {resolved}")
+        if video_path.exists():
+            try:
+                parts.append(f"video size: {video_path.stat().st_size} bytes")
+            except OSError:
+                pass
+
+    return "\n".join(parts)
+
+
+def _try_open_video(video_path: Path):
+    """Try multiple backends to open a video; returns (cap, backend_name) or (None, None)."""
+    candidates = [("ANY", None)]
+    if hasattr(cv2, "CAP_FFMPEG"):
+        candidates.append(("FFMPEG", cv2.CAP_FFMPEG))
+    if hasattr(cv2, "CAP_GSTREAMER"):
+        candidates.append(("GSTREAMER", cv2.CAP_GSTREAMER))
+
+    for name, api in candidates:
+        try:
+            if api is None:
+                cap = cv2.VideoCapture(str(video_path))
+            else:
+                cap = cv2.VideoCapture(str(video_path), api)
+        except Exception:
+            cap = None
+
+        if cap is not None and cap.isOpened():
+            return cap, name
+
+        try:
+            if cap is not None:
+                cap.release()
+        except Exception:
+            pass
+
+    return None, None
 
 # Add utilities to path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'utilities'))
@@ -161,8 +243,14 @@ class StartupDialog(QDialog):
             
             # Get video info
             cap = cv2.VideoCapture(str(video_path))
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            fps = cap.get(cv2.CAP_PROP_FPS)
+            if not cap.isOpened():
+                total_frames = 0
+                fps = 0.0
+                open_ok = False
+            else:
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                open_ok = True
             cap.release()
             
             # Check saved masks (new location first, then legacy locations)
@@ -188,6 +276,7 @@ class StartupDialog(QDialog):
                 'fps': fps,
                 'masks_saved': masks_saved,
                 'masks_dir': masks_dir_used,
+                'opencv_open_ok': open_ok,
             }
             
             self.video_combo.addItem(name)
@@ -197,7 +286,7 @@ class StartupDialog(QDialog):
         folder = QFileDialog.getExistingDirectory(
             self,
             "Select Directory Containing MP4 Videos",
-            str(self.base_dir),
+            str('/opt/5-ALA-Videos' if Path('/opt/5-ALA-Videos').exists() else str(Path.home())),
             QFileDialog.ShowDirsOnly
         )
         
@@ -228,13 +317,6 @@ class StartupDialog(QDialog):
         
         self.selected_video = name
         info = self.video_info[name]
-        
-        # Update info label (removed pre-rendered info)
-        self.info_label.setText(
-            f"Total frames: {info['total_frames']:,}\n"
-            f"FPS: {info['fps']:.1f}\n"
-            f"Masks saved: {info['masks_saved']:,}"
-        )
         
         # Update range buttons
         self._update_range_buttons(info)
@@ -920,9 +1002,18 @@ class CavityTool(QMainWindow):
             raise ValueError(f"Video file not found: {self.video_path}")
         
         # Open video and get info
-        self.video_cap = cv2.VideoCapture(str(self.video_path))
-        if not self.video_cap.isOpened():
-            raise ValueError(f"Could not open video: {self.video_path}")
+        self.video_cap, backend = _try_open_video(self.video_path)
+        if self.video_cap is None:
+            diag = _opencv_runtime_diagnostics(self.video_path)
+            raise ValueError(
+                "Could not open video with OpenCV.\n\n"
+                f"{diag}\n\n"
+                "Suggested debugging:\n"
+                "- Run: OPENCV_VIDEOIO_DEBUG=1 python define_cavity_polished.py ...\n"
+                "- Check build info for 'FFMPEG: YES' or 'GStreamer: YES'.\n"
+                "- Validate the MP4 with ffprobe/ffmpeg (codec support).\n"
+            )
+        self.video_backend = backend or "ANY"
         
         total_frames = int(self.video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
         self.fps = self.video_cap.get(cv2.CAP_PROP_FPS)
@@ -1069,13 +1160,35 @@ class CavityTool(QMainWindow):
             else:
                 device = "cpu"
             print(f"Initializing SAM2 on {device}...")
-            # Use config name (Hydra will find it in SAM2 package)
+            
             config_name = "sam2_hiera_l.yaml"
-            sam2_model = build_sam2(config_name, str(self.checkpoint_path), device=device)
+
+            # Build model WITHOUT relying on a base checkpoint.
+            # This works as long as the fine-tuned checkpoint contains a full model_state_dict.
+            sam2_model = build_sam2(config_name, None, device=device)
+            sam2_model = sam2_model.to(device)
             self.predictor = SAM2ImagePredictor(sam2_model)
+
+            if not self.checkpoint_path or not self.checkpoint_path.exists():
+                raise FileNotFoundError(
+                    f"SAM2 fine-tuned checkpoint not found: {self.checkpoint_path}"
+                )
+
+            print(f"Loading SAM2 weights from (fine-tuned only): {self.checkpoint_path}")
+            checkpoint = torch.load(str(self.checkpoint_path), map_location=device, weights_only=False)
+            state_dict = checkpoint.get('model_state_dict', checkpoint) if isinstance(checkpoint, dict) else checkpoint
+            self.predictor.model.load_state_dict(state_dict)
+            if isinstance(checkpoint, dict):
+                print(f"✓ Loaded fine-tuned checkpoint from step: {checkpoint.get('step', 'unknown')}")
+                if 'mean_iou' in checkpoint:
+                    print(f"  Checkpoint mean IoU: {checkpoint['mean_iou']:.4f}")
+            
+            self.predictor.model.eval()
             print("SAM2 ready")
         except Exception as e:
             print(f"Failed to initialize SAM2: {e}")
+            import traceback
+            traceback.print_exc()
             self.predictor = None
     
     def _init_ui(self):
@@ -1462,11 +1575,17 @@ class CavityTool(QMainWindow):
     def _propagate_mask_to_next(self, src_frame_idx, dst_frame_idx):
         """Use SAM2 to propagate mask from src to dst frame (for auto-propagation).
         Returns the propagated mask or None if failed."""
-        if not SAM2_AVAILABLE or self.cavity_mask is None:
+        if not SAM2_AVAILABLE:
+            print("[Propagation] SAM2 not available")
+            return None
+        
+        if self.cavity_mask is None:
+            print("[Propagation] No mask to propagate")
             return None
         
         try:
             from sam2.build_sam import build_sam2_video_predictor
+            print(f"[Propagation] Propagating mask from frame {src_frame_idx} to {dst_frame_idx}...")
             
             # Create temp directory with 2 frames
             temp_dir = tempfile.mkdtemp()
@@ -1476,6 +1595,7 @@ class CavityTool(QMainWindow):
             dst_img = self._load_frame_from_video(dst_frame_idx)
             
             if src_img is None or dst_img is None:
+                print(f"[Propagation] Failed to load frames: src={src_img is not None}, dst={dst_img is not None}")
                 shutil.rmtree(temp_dir)
                 return None
             
@@ -1491,12 +1611,24 @@ class CavityTool(QMainWindow):
                     device = "cuda"
                 else:
                     device = "cpu"
+                print(f"[Propagation] Building video predictor on {device}...")
                 config_name = "sam2_hiera_l.yaml"
+
+                # Build WITHOUT relying on a base checkpoint; load fine-tuned weights below.
                 self.video_predictor = build_sam2_video_predictor(
                     config_name,
-                    str(self.checkpoint_path),
+                    None,
                     device=device
                 )
+                
+                # Load fine-tuned weights if available
+                if self.checkpoint_path and self.checkpoint_path.exists():
+                    print(f"[Propagation] Loading fine-tuned weights from {self.checkpoint_path}")
+                    checkpoint = torch.load(str(self.checkpoint_path), map_location=device, weights_only=False)
+                    state_dict = checkpoint.get('model_state_dict', checkpoint) if isinstance(checkpoint, dict) else checkpoint
+                    self.video_predictor.load_state_dict(state_dict)
+                    self.video_predictor.eval()
+                print("[Propagation] Video predictor ready")
             
             # Initialize state and add mask
             inference_state = self.video_predictor.init_state(video_path=temp_dir)
@@ -1519,9 +1651,17 @@ class CavityTool(QMainWindow):
             # Clean up
             shutil.rmtree(temp_dir)
             
+            if propagated_mask is not None:
+                print(f"[Propagation] ✓ Successfully propagated mask")
+            else:
+                print(f"[Propagation] ✗ No mask generated")
+            
             return propagated_mask
             
         except Exception as e:
+            print(f"[Propagation] ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _propagate_single_frame(self, src_frame, dst_frame, src_mask):
@@ -1561,11 +1701,20 @@ class CavityTool(QMainWindow):
                     device = "cpu"
                 print(f"Building video predictor on {device}...")
                 config_name = "sam2_hiera_l.yaml"
+
+                # Build WITHOUT relying on a base checkpoint; load fine-tuned weights below.
                 self.video_predictor = build_sam2_video_predictor(
                     config_name,
-                    str(self.checkpoint_path),
+                    None,
                     device=device
                 )
+                
+                # Load fine-tuned weights if available
+                if self.checkpoint_path and self.checkpoint_path.exists():
+                    checkpoint = torch.load(str(self.checkpoint_path), map_location=device, weights_only=False)
+                    state_dict = checkpoint.get('model_state_dict', checkpoint) if isinstance(checkpoint, dict) else checkpoint
+                    self.video_predictor.load_state_dict(state_dict)
+                    self.video_predictor.eval()
             
             # Initialize state and add mask
             inference_state = self.video_predictor.init_state(video_path=temp_dir)
@@ -1912,7 +2061,7 @@ def main():
     parser.add_argument("--end", type=int, default=None,
                        help="End frame index")
     parser.add_argument("--checkpoint", type=str, 
-                       default=str(Path(__file__).parent.parent.parent / "models" / "sam2_checkpoints" / "sam2_hiera_large.pt"),
+                       default=str(Path(__file__).parent.parent.parent / "models" / "sam2_checkpoints" / "sam2_cavity_finetuned.pt"),
                        help="Path to SAM2 checkpoint")
     
     args = parser.parse_args()
