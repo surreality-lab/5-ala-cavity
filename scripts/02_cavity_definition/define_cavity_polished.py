@@ -1284,16 +1284,23 @@ class CavityTool(QMainWindow):
                 self._save_current_silent(current_frame_idx)
                 
                 # Auto-propagate if moving forward to next frame
-                # Will update next frame's mask even if it exists (cascading update)
+                # Only propagate if destination frame doesn't have annotation yet
                 if auto_propagate and SAM2_AVAILABLE and self.cavity_mask is not None:
                     new_idx = self.frame_indices.index(frame_idx)
                     # Check if moving forward by 1 frame
                     if new_idx == self.current_idx + 1:
-                        # Always propagate to next frame (will overwrite existing mask)
-                        propagated = self._propagate_mask_to_next(current_frame_idx, frame_idx)
-                        if propagated is not None:
-                            # Temporarily store propagated mask to load it
-                            self._temp_propagated_mask = propagated
+                        # Check if destination frame already has a mask
+                        dst_mask_path, _ = self._find_existing_mask(frame_idx)
+                        if dst_mask_path is None or not dst_mask_path.exists():
+                            # No existing mask - propagate from current frame
+                            print(f"[Auto-propagate] Frame {frame_idx} has no annotation, propagating from {current_frame_idx}")
+                            propagated = self._propagate_mask_to_next(current_frame_idx, frame_idx)
+                            if propagated is not None:
+                                # Temporarily store propagated mask to load it
+                                self._temp_propagated_mask = propagated
+                        else:
+                            # Existing mask found - skip propagation, will load existing annotation
+                            print(f"[Auto-propagate] Frame {frame_idx} already has annotation, skipping propagation")
         
         self.current_idx = self.frame_indices.index(frame_idx)
         
