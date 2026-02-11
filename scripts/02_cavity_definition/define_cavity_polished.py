@@ -459,9 +459,13 @@ class FrameViewer(QLabel):
         
         # Drag state
         self._is_dragging = False
+        
+        # Zoom state
+        self.zoom_level = 1.0
+        self.zoom_center = None  # (x, y) in original image coords
     
-    def set_image(self, img_bgr):
-        """Set image from BGR numpy array."""
+    def set_image(self, img_bgr, zoom_level=1.0, zoom_center=None):
+        """Set image from BGR numpy array with optional zoom."""
         if img_bgr is None:
             self._image = None
             self._display_pixmap = None
@@ -469,6 +473,8 @@ class FrameViewer(QLabel):
             return
         
         self._image = img_bgr.copy()
+        self.zoom_level = zoom_level
+        self.zoom_center = zoom_center
         self._update_display()
     
     def set_brush_params(self, size, mode_on):
@@ -478,13 +484,59 @@ class FrameViewer(QLabel):
         self.update()
     
     def _update_display(self):
-        """Convert image to pixmap and scale to fit."""
+        """Convert image to pixmap and scale to fit, applying zoom if needed."""
         if self._image is None:
             return
         
         h, w = self._image.shape[:2]
-        rgb = cv2.cvtColor(self._image, cv2.COLOR_BGR2RGB)
-        qimg = QImage(rgb.data, w, h, w * 3, QImage.Format_RGB888)
+        
+        # Apply zoom by cropping a region and scaling it up
+        if self.zoom_level > 1.0 and self.zoom_center is not None:
+            # Calculate visible region size
+            visible_w = int(w / self.zoom_level)
+            visible_h = int(h / self.zoom_level)
+            
+            # Calculate crop region centered at zoom_center
+            cx, cy = self.zoom_center
+            x1 = max(0, int(cx - visible_w / 2))
+            y1 = max(0, int(cy - visible_h / 2))
+            x2 = min(w, x1 + visible_w)
+            y2 = min(h, y1 + visible_h)
+            
+            # Adjust if at edges
+            if x2 - x1 < visible_w:
+                x1 = max(0, x2 - visible_w)
+            if y2 - y1 < visible_h:
+                y1 = max(0, y2 - visible_h)
+            
+            # Crop the zoomed region
+            cropped = self._image[y1:y2, x1:x2]
+            display_img = cropped
+            
+            # Store crop offset for coordinate mapping
+            self._crop_offset = (x1, y1)
+        elif self.zoom_level > 1.0:
+            # Zoom centered on image center
+            visible_w = int(w / self.zoom_level)
+            visible_h = int(h / self.zoom_level)
+            
+            x1 = (w - visible_w) // 2
+            y1 = (h - visible_h) // 2
+            x2 = x1 + visible_w
+            y2 = y1 + visible_h
+            
+            cropped = self._image[y1:y2, x1:x2]
+            display_img = cropped
+            self._crop_offset = (x1, y1)
+        else:
+            # No zoom, show full image
+            display_img = self._image
+            self._crop_offset = (0, 0)
+        
+        # Convert to Qt pixmap
+        h_disp, w_disp = display_img.shape[:2]
+        rgb = cv2.cvtColor(display_img, cv2.COLOR_BGR2RGB)
+        qimg = QImage(rgb.data, w_disp, h_disp, w_disp * 3, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(qimg)
         
         # Scale to fit widget while maintaining aspect ratio
@@ -492,7 +544,7 @@ class FrameViewer(QLabel):
         self._display_pixmap = scaled
         
         # Calculate scale and offset for coordinate mapping
-        self._scale = scaled.width() / w
+        self._scale = scaled.width() / w_disp
         self._offset = QPoint(
             (self.width() - scaled.width()) // 2,
             (self.height() - scaled.height()) // 2
@@ -505,13 +557,21 @@ class FrameViewer(QLabel):
         self._update_display()
     
     def _widget_to_image_coords(self, pos):
-        """Convert widget coordinates to image coordinates."""
+        """Convert widget coordinates to original image coordinates (accounting for zoom)."""
         if self._image is None:
             return None, None
         
-        # Adjust for centering offset
-        x = (pos.x() - self._offset.x()) / self._scale
-        y = (pos.y() - self._offset.y()) / self._scale
+        # Adjust for centering offset and scale
+        x_display = (pos.x() - self._offset.x()) / self._scale
+        y_display = (pos.y() - self._offset.y()) / self._scale
+        
+        # Account for crop offset from zoom
+        if hasattr(self, '_crop_offset'):
+            x = x_display + self._crop_offset[0]
+            y = y_display + self._crop_offset[1]
+        else:
+            x = x_display
+            y = y_display
         
         h, w = self._image.shape[:2]
         if 0 <= x < w and 0 <= y < h:
@@ -1071,6 +1131,11 @@ class CavityTool(QMainWindow):
         self.wobble_saved_pos = []
         self.wobble_saved_neg = []
         
+        # Zoom state
+        self.zoom_level = 1.0  # 1.0 = 100%, range [1.0, 2.0]
+        self.zoom_center = None  # (x, y) in image coords, or None for center
+        self.last_cursor_pos = None  # Track cursor for zoom center
+        
         # SAM2 predictors
         self.predictor = None  # For click-based segmentation
         self.video_predictor = None  # Lazy-loaded only when propagation is needed (saves memory)
@@ -1412,7 +1477,7 @@ class CavityTool(QMainWindow):
             cv2.line(display, (x-4, y-4), (x+4, y+4), (0, 0, 255), 2)
             cv2.line(display, (x-4, y+4), (x+4, y-4), (0, 0, 255), 2)
         
-        self.frame_viewer.set_image(display)
+        self.frame_viewer.set_image(display, self.zoom_level, self.zoom_center)
         self.frame_viewer.set_brush_params(self.brush_size, self.tool_mode == "brush")
         self.control_panel.zoom_preview.set_brush_params(self.brush_size, self.tool_mode == "brush")
     
@@ -1447,6 +1512,39 @@ class CavityTool(QMainWindow):
         self.cavity_mask = None
         self.cavity_points_pos = []
         self.cavity_points_neg = []
+        self._update_viewer()
+    
+    def _zoom_in(self):
+        """Zoom in by 10%, max 200%."""
+        if self.zoom_level >= 2.0:
+            return  # Already at max zoom
+        
+        # Determine zoom center
+        if self.last_cursor_pos is not None:
+            # Zoom at cursor position
+            self.zoom_center = self.last_cursor_pos
+        elif self.zoom_center is None:
+            # Zoom at image center
+            if self.current_image is not None:
+                h, w = self.current_image.shape[:2]
+                self.zoom_center = (w // 2, h // 2)
+        
+        # Increase zoom by 10%
+        self.zoom_level = min(2.0, self.zoom_level + 0.1)
+        self._update_viewer()
+    
+    def _zoom_out(self):
+        """Zoom out by 10%, min 100%."""
+        if self.zoom_level <= 1.0:
+            return  # Already at minimum zoom (100%)
+        
+        # Decrease zoom by 10%
+        self.zoom_level = max(1.0, self.zoom_level - 0.1)
+        
+        # Reset zoom center if back to 100%
+        if self.zoom_level == 1.0:
+            self.zoom_center = None
+        
         self._update_viewer()
     
     def _save_current_silent(self, frame_idx):
@@ -1849,6 +1947,8 @@ class CavityTool(QMainWindow):
     def _on_mouse_move(self, x, y):
         self.control_panel.update_cursor_pos(x, y)
         self.control_panel.zoom_preview.update_position(x, y)
+        # Track cursor position for zoom centering
+        self.last_cursor_pos = (x, y)
     
     def _on_mouse_click(self, x, y, is_left):
         if not is_left:
@@ -1953,16 +2053,24 @@ class CavityTool(QMainWindow):
             self._update_viewer()
         
         elif key == Qt.Key_Plus or key == Qt.Key_Equal:
-            self.brush_size = min(100, self.brush_size + 5)
-            self.control_panel._brush_size = self.brush_size
-            self.control_panel.size_label.setText(str(self.brush_size))
-            self._update_viewer()
+            # Check if Shift is pressed for brush size, otherwise zoom
+            if event.modifiers() & Qt.ShiftModifier:
+                self.brush_size = min(100, self.brush_size + 5)
+                self.control_panel._brush_size = self.brush_size
+                self.control_panel.size_label.setText(str(self.brush_size))
+                self._update_viewer()
+            else:
+                self._zoom_in()
         
         elif key == Qt.Key_Minus:
-            self.brush_size = max(5, self.brush_size - 5)
-            self.control_panel._brush_size = self.brush_size
-            self.control_panel.size_label.setText(str(self.brush_size))
-            self._update_viewer()
+            # Check if Shift is pressed for brush size, otherwise zoom
+            if event.modifiers() & Qt.ShiftModifier:
+                self.brush_size = max(5, self.brush_size - 5)
+                self.control_panel._brush_size = self.brush_size
+                self.control_panel.size_label.setText(str(self.brush_size))
+                self._update_viewer()
+            else:
+                self._zoom_out()
         
         elif key == Qt.Key_Z:
             self._undo()

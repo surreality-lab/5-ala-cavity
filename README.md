@@ -118,8 +118,10 @@ That's it! The tool will:
 | `A` | Add mode (include regions in mask) |
 | `X` | Exclude mode (remove regions from mask) |
 | `B` | Toggle Click/Brush tool |
-| `+` / `=` | Increase brush size |
-| `-` | Decrease brush size |
+| `+` / `=` | **Zoom in** by 10% (at cursor position, max 200%) |
+| `-` | **Zoom out** by 10% (min 100%, no zoom-out below original) |
+| `Shift` + `+` | Increase brush size |
+| `Shift` + `-` | Decrease brush size |
 | `Z` | Undo last edit (enabled only after modifications) |
 | `R` | Reset - clear all mask and points for current frame |
 | `Q` / Escape | Quit tool (auto-saves everything) |
@@ -131,6 +133,30 @@ That's it! The tool will:
 - **HSV-V**: HSV Value channel (brightness only, useful for detecting artifacts)
 
 All processing happens on-the-fly from the video file - no pre-rendering needed.
+
+### Zoom Functionality
+
+The tool includes intelligent zoom controls for detailed annotation work:
+
+**How to Zoom:**
+- Press `+` or `=` to **zoom in** by 10% increments
+- Press `-` to **zoom out** by 10% increments
+- Use `Shift + +` or `Shift + -` to adjust **brush size** instead
+
+**Zoom Behavior:**
+- **Default**: 100% (full frame visible)
+- **Maximum zoom**: 200% (2x magnification)
+- **Minimum zoom**: 100% (cannot zoom out beyond original size)
+- **Zoom center**: Automatically centers on your cursor position
+  - If cursor is outside the frame, centers on the middle of the screen
+- **Persistence**: Zoom level is maintained across frames as you navigate
+- **Smart cropping**: Shows only the zoomed region without altering pixels
+
+**Use Cases:**
+- Fine-tune cavity boundaries in complex areas
+- Precisely place exclusion points on small artifacts
+- Refine brush strokes in tight spaces
+- Verify mask edges at high magnification
 
 ### Auto-Save System
 
