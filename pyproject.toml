@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ala-5fps"
+version = "0.1.0"
+description = "5-ALA fluorescence-guided surgery video analysis pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24.0",
+    "opencv-python-headless>=4.8.0",
+    "tqdm>=4.65.0",
+    "matplotlib>=3.7.0",
+    "scipy>=1.10.0",
+    "scikit-image>=0.21.0",
+]
+
+[project.optional-dependencies]
+gui = ["PyQt5>=5.15.0"]
+gpu = ["torch>=2.0.0", "torchvision>=0.15.0"]
+dev = ["pytest>=7.0", "ruff>=0.4.0"]
+
+[tool.setuptools]
+py-modules = ["config"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lib*", "segmentation*", "exclusion*", "analysis*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
