@@ -23,7 +23,9 @@ except ImportError:
     SAM2_AVAILABLE = False
 
 
-def _pick_device() -> str:
+def _pick_device(preferred: str | None = None) -> str:
+    if preferred:
+        return preferred
     if not SAM2_AVAILABLE:
         return "cpu"
     if torch.backends.mps.is_available():
@@ -72,9 +74,9 @@ class SAM2Engine:
 
     CONFIG = "sam2_hiera_l.yaml"
 
-    def __init__(self, checkpoint_path: str | Path | None = None):
+    def __init__(self, checkpoint_path: str | Path | None = None, device: str | None = None):
         self.checkpoint_path = Path(checkpoint_path) if checkpoint_path else None
-        self.device = _pick_device()
+        self.device = _pick_device(device)
         self.weights_label: str = "None"
         self.image_predictor: SAM2ImagePredictor | None = None
         self.video_predictor = None
@@ -275,3 +277,10 @@ class SAM2Engine:
             return {}
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    # ── lifecycle helpers ──────────────────────────────────────────
+
+    def shutdown(self):
+        """Release model references so CUDA context can unwind."""
+        self.image_predictor = None
+        self.video_predictor = None

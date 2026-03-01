@@ -3,7 +3,7 @@
 
 # Core
 numpy>=1.24.0
-opencv-python>=4.8.0
+opencv-python-headless>=4.8.0
 matplotlib>=3.7.0
 tqdm>=4.65.0
 
@@ -13,6 +13,11 @@ PyQt5>=5.15.0
 # PyTorch (required for SAM2)
 torch>=2.0.0
 torchvision>=0.15.0
+
+# GPU manager service
+fastapi>=0.110.0
+uvicorn>=0.27.0
+httpx>=0.26.0
 
 # ===========================================
 # IMPORTANT: SAM2 must be installed separately!

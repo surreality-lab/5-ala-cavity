@@ -15,7 +15,7 @@ from ..engine.mask_store import (
     MaskStore, LAYER_CATEGORIES, CATEGORY_NAMES,
     instance_key, parse_key, instance_color,
 )
-from ..engine.sam2_engine import SAM2Engine, SAM2_AVAILABLE
+from ..engine.sam2_engine import SAM2Engine
 from .frame_viewer import FrameViewer, compose_overlays
 from .control_panel import ControlPanel
 from .review_dialog import ReviewDialog
@@ -24,7 +24,7 @@ from .review_dialog import ReviewDialog
 class AnnotationTool(QMainWindow):
     """Video segmentation tool powered by SAM2."""
 
-    def __init__(self, video_path, output_dir, start_frame=0, end_frame=None, checkpoint=None):
+    def __init__(self, video_path, output_dir, start_frame=0, end_frame=None, checkpoint=None, sam2_engine=None):
         super().__init__()
         self.video = VideoReader(video_path)
         self.start_frame = start_frame
@@ -37,7 +37,7 @@ class AnnotationTool(QMainWindow):
             base_output_dir=Path(output_dir) / "cavity",
             video_folder=Path(video_path).parent,
         )
-        self.sam2 = SAM2Engine(checkpoint)
+        self.sam2 = sam2_engine or SAM2Engine(checkpoint)
         self.modified: set[int] = set()
 
         self.display_mode = "original"
@@ -218,7 +218,7 @@ class AnnotationTool(QMainWindow):
                 self.store.save_frame(cur)
                 self.modified.add(cur)
 
-            if propagate and SAM2_AVAILABLE:
+            if propagate and self.sam2.available:
                 new_i = self._frame_to_idx.get(fidx)
                 if new_i is not None and new_i == self.idx + 1:
                     active_masks = self.store.get_active_masks_for_propagation()
@@ -226,10 +226,14 @@ class AnnotationTool(QMainWindow):
                         src = self.video.read_original(cur)
                         dst = self.video.read_original(fidx)
                         if src is not None and dst is not None:
-                            results = self.sam2.propagate_single(
-                                src, dst,
-                                [(oid, m) for _, oid, m in active_masks],
-                            )
+                            try:
+                                results = self.sam2.propagate_single(
+                                    src, dst,
+                                    [(oid, m) for _, oid, m in active_masks],
+                                )
+                            except Exception as exc:
+                                self.statusBar().showMessage(f"SAM2 error: {exc}", 5000)
+                                results = {}
                             if results:
                                 self.store.load_frame(fidx)
                                 self.store.apply_propagated(results)
@@ -371,7 +375,11 @@ class AnnotationTool(QMainWindow):
         prior_negs = self.store.sample_prior_negatives(layer.category)
         all_neg = layer.points_neg + prior_negs
 
-        result = self.sam2.predict_mask(layer.points_pos, all_neg)
+        try:
+            result = self.sam2.predict_mask(layer.points_pos, all_neg)
+        except Exception as exc:
+            self.statusBar().showMessage(f"SAM2 error: {exc}", 5000)
+            return
         if result is not None:
             if layer.inverted:
                 result = cv2.bitwise_not(result)
@@ -448,7 +456,11 @@ class AnnotationTool(QMainWindow):
         if layer.points_pos or layer.points_neg:
             prior_negs = self.store.sample_prior_negatives(layer.category)
             all_neg = layer.points_neg + prior_negs
-            result = self.sam2.predict_mask(layer.points_pos, all_neg)
+            try:
+                result = self.sam2.predict_mask(layer.points_pos, all_neg)
+            except Exception as exc:
+                self.statusBar().showMessage(f"SAM2 error: {exc}", 5000)
+                return
             if result is not None:
                 if layer.inverted:
                     result = cv2.bitwise_not(result)
@@ -496,13 +508,17 @@ class AnnotationTool(QMainWindow):
         if len(target_frames) < 2:
             return
 
-        results = self.sam2.propagate_batch(
-            target_frames,
-            [(oid, m) for _, oid, m in active_masks],
-            progress_cb=lambda cur, total: self.statusBar().showMessage(
-                f"  Propagating... {cur}/{total}"
-            ),
-        )
+        try:
+            results = self.sam2.propagate_batch(
+                target_frames,
+                [(oid, m) for _, oid, m in active_masks],
+                progress_cb=lambda cur, total: self.statusBar().showMessage(
+                    f"  Propagating... {cur}/{total}"
+                ),
+            )
+        except Exception as exc:
+            self.statusBar().showMessage(f"SAM2 error: {exc}", 5000)
+            return
         if not results:
             self.statusBar().showMessage("Propagation produced no results", 3000)
             return
@@ -844,4 +860,9 @@ class AnnotationTool(QMainWindow):
         print(f"Saved {len(self.modified)} frames -> {summary_path}")
         self.store.release_lock()
         self.video.release()
+        if hasattr(self.sam2, "shutdown"):
+            try:
+                self.sam2.shutdown()
+            except Exception:
+                pass
         event.accept()

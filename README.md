@@ -27,16 +27,61 @@ cd ../..
 
 The config file (`sam2_hiera_l.yaml`) is already included.
 
-### 3. Run the Cavity Tool
+### 3. Launch the Annotation GUI
 ```bash
-python scripts/02_cavity_definition/define_cavity_polished.py
+python -m segmentation
 ```
 
-That's it! The tool will:
-- Let you browse for any folder containing MP4 videos
-- Automatically scan and list all videos found
-- Process video frames on-the-fly (no pre-rendering needed)
-- Auto-save all your work as you annotate
+On first launch the app automatically starts the shared GPU manager (FastAPI + SAM2) on the workstation, then opens the PyQt GUI. Subsequent users simply run the same command; their sessions register with the GPU manager, queue fairly for the dual A5000s, and reuse the same mask output directories. Use `python -m segmentation --video path/to/video.mp4 --output path/to/masks` to skip the startup dialog, or `--local-sam2` to bypass the manager in offline environments.
+
+---
+
+## Environment Setup (Recommended)
+
+Run everything under a dedicated conda env so PyQt, CUDA, and the GPU manager share the same dependency set:
+
+```bash
+# 0. (Optional) remove any stale copy
+conda env remove -n alaenv -y
+
+# 1. Create + activate Python 3.10 env
+conda create -n alaenv python=3.10 -y
+conda activate alaenv
+
+# 2. Install project deps (uses opencv-python-headless to avoid Qt conflicts)
+pip install -r requirements.txt
+
+# 3. Install SAM2 from source
+pip install git+https://github.com/facebookresearch/segment-anything-2.git
+
+# 4. Grab the checkpoint once per machine (see Quick Start step 2)
+mkdir -p models/sam2_checkpoints
+wget -O models/sam2_checkpoints/sam2_hiera_large.pt \
+  https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt
+
+# 5. Launch the GUI inside the env
+python -m segmentation
+```
+
+Remote GUI sessions (XQuartz, X11 forwarding) need a working display before launching PyQt. Verify with `xclock`, then run `export LIBGL_ALWAYS_INDIRECT=1` if you see `glx: failed to create drisw screen` while connected over SSH.
+
+---
+
+## Shared GPU Manager
+
+- The first GUI session spawns a FastAPI GPU manager on the annotation workstation. It loads SAM2 once per GPU (both RTX A5000s bridged with NVLink), keeps the weights in GPU memory, and exposes HTTP endpoints that all GUIs call for clicks or propagation.
+- Each GUI registers a session token; the manager enforces round-robin fairness so no user can monopolize the accelerators. Jobs queue transparently, so expect short delays if more sessions are active than available GPUs.
+- When the last GUI disconnects or everyone logs off, the manager waits ~45 s, then shuts itself down so the box stays clean for the next workday.
+- Need to run it manually (e.g., headless server maintenance)?
+  ```bash
+  python -m segmentation.server.gpu_manager \
+    --host 0.0.0.0 --port 9777 \
+    --checkpoint /opt/5-ALA-Videos/weights/sam2_cavity_finetuned.pt
+  ```
+- GUI flags:
+  - `--gpu-manager-url http://host:9777` → connect to a custom deployment
+  - `--no-manager-autostart` → require the service to be running already
+  - `--local-sam2` → bypass the manager and fall back to single-process SAM2 (use only for offline debugging; no fairness or shared caching)
 
 ---
 
@@ -76,9 +121,9 @@ That's it! The tool will:
 ### Workflow
 
 1. **Launch Tool**
-   ```bash
-   python scripts/02_cavity_definition/define_cavity_polished.py
-   ```
+  ```bash
+  python -m segmentation [--video data/my-case/video.mp4 --output data/my-case/masks]
+  ```
 
 2. **Select Video**
    - Click "Browse..." to select a folder
@@ -231,32 +276,23 @@ Frame 126-150: Auto-update with corrected boundary as you navigate forward
 
 ```
 Project Root/
-├── data/
-│   └── {video-folder}/            # Video folder (any name)
-│       ├── video.mp4              # Source video (any name)
-│       └── masks/                 # Auto-created by tools
-│           └── cavity/            # Cavity annotations
-│               ├── session_summary.json
-│               └── frame_NNNNNN/  # Per-frame folders
-│                   ├── cavity_mask.png
-│                   ├── instance_data.json
-│                   └── visualization.png
+├── segmentation/                  # PyQt GUI, engines, GPU manager
+│   ├── main.py                    # python -m segmentation entry point
+│   ├── engine/
+│   │   ├── sam2_engine.py         # Local SAM2 wrapper
+│   │   ├── remote_sam2.py         # HTTP client for GPU manager
+│   │   └── mask_store.py          # Persistence + locking
+│   ├── ui/                        # Frame viewer, panels, dialogs
+│   └── server/
+│       └── gpu_manager.py         # FastAPI service (auto-launched)
+├── analysis/                      # Post-processing + statistics
+├── exclusion/                     # Exclusion mask pipeline
+├── lib/                           # Fluorescence + topology utilities
 ├── models/
-│   └── sam2_checkpoints/
-│       ├── sam2_hiera_large.pt    # ~900MB (download separately)
-│       └── sam2_hiera_l.yaml      # Config (included)
-├── scripts/
-│   ├── 02_cavity_definition/
-│   │   └── define_cavity_polished.py
-│   ├── 03_analysis/
-│   │   ├── detect_reflections_two_stage.py
-│   │   ├── detect_blood_simple.py
-│   │   └── trajectory_radial_analysis_v2.py
-│   ├── 04_visualization/
-│   │   └── create_comparison_video.py
-│   └── utilities/
-│       ├── common.py
-│       └── read_session_summary.py
+│   └── sam2_checkpoints/          # Downloaded SAM2 weights (.pt, .yaml)
+├── data/
+│   └── {video-folder}/masks/      # Shared output written by all sessions
+├── requirements.txt
 └── README.md
 ```
 

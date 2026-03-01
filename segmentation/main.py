@@ -8,13 +8,58 @@ Usage:
 
 import os
 import sys
+import time
 import argparse
+import subprocess
 from pathlib import Path
+from urllib.parse import urlparse
 
 from PyQt5.QtWidgets import QApplication, QDialog
 
 from .ui.startup_dialog import StartupDialog
 from .ui.app_window import AnnotationTool
+from .engine.sam2_engine import SAM2Engine
+from .engine.remote_sam2 import RemoteSAM2Engine
+
+import httpx
+
+
+def _ensure_gpu_manager(url: str, checkpoint: str | None, autostart: bool = True, timeout: float = 60.0):
+    try:
+        httpx.get(url.rstrip("/") + "/health", timeout=3.0)
+        return
+    except httpx.HTTPError:
+        if not autostart:
+            raise RuntimeError("GPU manager is not running and autostart is disabled")
+
+    parsed = urlparse(url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 9777
+    cmd = [
+        sys.executable,
+        "-m",
+        "segmentation.server.gpu_manager",
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
+    if checkpoint:
+        cmd += ["--checkpoint", checkpoint]
+
+    log_path = Path.home() / ".cache/5ala/gpu_manager.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "ab") as log:
+        subprocess.Popen(cmd, stdout=log, stderr=log, start_new_session=True)
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            httpx.get(url.rstrip("/") + "/health", timeout=3.0)
+            return
+        except httpx.HTTPError:
+            time.sleep(1.0)
+    raise RuntimeError("GPU manager failed to start within timeout")
 
 
 def main():
@@ -40,10 +85,23 @@ def main():
     parser.add_argument("--checkpoint", type=str,
                         default=str(_default_ckpt),
                         help="SAM2 checkpoint path (or set SAM2_CHECKPOINT)")
+    parser.add_argument("--gpu-manager-url", type=str,
+                        default=os.environ.get("SAM2_MANAGER_URL", "http://127.0.0.1:9777"),
+                        help="Base URL for the shared GPU manager")
+    parser.add_argument("--local-sam2", action="store_true",
+                        help="Bypass GPU manager and load SAM2 inside the GUI process")
+    parser.add_argument("--no-manager-autostart", action="store_true",
+                        help="Do not auto-start the GPU manager if it is not running")
     args = parser.parse_args()
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    if args.local_sam2:
+        sam2 = SAM2Engine(args.checkpoint)
+    else:
+        _ensure_gpu_manager(args.gpu_manager_url, args.checkpoint, autostart=not args.no_manager_autostart)
+        sam2 = RemoteSAM2Engine(args.gpu_manager_url)
 
     if args.video and args.output:
         tool = AnnotationTool(
@@ -52,6 +110,7 @@ def main():
             start_frame=args.start,
             end_frame=args.end,
             checkpoint=args.checkpoint,
+            sam2_engine=sam2,
         )
     else:
         dlg = StartupDialog(args.base_dir)
@@ -68,6 +127,7 @@ def main():
             start_frame=sf,
             end_frame=ef,
             checkpoint=args.checkpoint,
+            sam2_engine=sam2,
         )
 
     sys.exit(app.exec_())
