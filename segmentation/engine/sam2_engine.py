@@ -226,7 +226,7 @@ class SAM2Engine:
             return results
         except Exception as exc:
             print(f"[SAM2] propagation error: {exc}")
-            return {}
+            raise RuntimeError(f"SAM2 propagate_single failed: {exc}") from exc
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -274,7 +274,7 @@ class SAM2Engine:
             return all_results
         except Exception as exc:
             print(f"[SAM2] batch propagation error: {exc}")
-            return {}
+            raise RuntimeError(f"SAM2 propagate_batch failed: {exc}") from exc
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

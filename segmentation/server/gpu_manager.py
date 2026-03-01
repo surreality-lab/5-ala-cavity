@@ -66,6 +66,23 @@ def _encode_mask(mask: np.ndarray) -> str:
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
+def _is_fatal_cuda_error(exc: Exception) -> bool:
+    """Return True when CUDA reported a failure that requires a restart."""
+    message = str(exc).lower()
+    fatal_markers = (
+        "illegal memory access",
+        "device-side assert triggered",
+        "cuda driver error",
+    )
+    if any(token in message for token in fatal_markers):
+        return True
+    if torch is not None:
+        cuda_error = getattr(torch.cuda, "CudaError", None)
+        if cuda_error and isinstance(exc, cuda_error):
+            return True
+    return False
+
+
 # ── configuration + state containers ───────────────────────────────
 
 
@@ -317,6 +334,7 @@ class GPUManagerState:
         self._workers: list[asyncio.Task] = []
         self._shutdown_task: asyncio.Task | None = None
         self._prune_task: asyncio.Task | None = None
+        self._fatal_triggered = False
 
     async def startup(self):
         self.pool = await GPUEnginePool.create(self.config.checkpoint)
@@ -345,6 +363,8 @@ class GPUManagerState:
             except Exception as exc:  # pragma: no cover - defensive path
                 if not job.future.done():
                     job.future.set_exception(exc)
+                if _is_fatal_cuda_error(exc):
+                    self._trigger_fatal_restart(exc)
             finally:
                 self.pool.release(idx)
 
@@ -375,6 +395,13 @@ class GPUManagerState:
         if self._shutdown_task and not self._shutdown_task.done():
             self._shutdown_task.cancel()
             self._shutdown_task = None
+
+    def _trigger_fatal_restart(self, exc: Exception):
+        if self._fatal_triggered:
+            return
+        self._fatal_triggered = True
+        print(f"GPU manager exiting after fatal CUDA error: {exc}", file=sys.stderr, flush=True)
+        os.kill(os.getpid(), signal.SIGTERM)
 
 
 def create_app(config: ManagerConfig) -> FastAPI:
